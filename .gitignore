@@ -1,0 +1,20 @@
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Project-specific ignores (from earlier)
+models/
+memory/chroma_db/
+chroma_db/
+logs/
+*.log
+.DS_Store
+state/active_models.json
