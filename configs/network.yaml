@@ -1,0 +1,10 @@
+router:
+  port: 8083
+  model_path: models/Arch-Router-1.5B-mlx
+
+model_server:
+  port_pool: [8084, 8085, 8086, 8087, 8088]
+  max_concurrent: 3
+  ram_safety_margin_gb: 6
+  large_model_ram_threshold_gb: 10
+  session_token_cap_large_gb_under: 8

@@ -1,0 +1,6 @@
+# Placeholder — fill from LLM-13-Models-List-Definition.md
+routes:
+  general_fast:
+    folder: Phi-3.5-mini-instruct
+    quant: 4bit
+    ram_gb_approx: 3.2

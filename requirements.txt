@@ -1,0 +1,11 @@
+mlx
+mlx-lm
+mlx-audio
+mlx-whisper
+langgraph
+mem0ai
+chromadb
+sentence-transformers
+httpx
+pyyaml
+psutil
