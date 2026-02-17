@@ -1,6 +1,34 @@
-# Placeholder — fill from LLM-13-Models-List-Definition.md
 routes:
+  creative_explore:
+    folder: gpt-oss-20b-Derestricted-mxfp4-mlx
+    ram_gb_approx: 12
+  coding_expert:
+    folder: Qwen3-Coder-30B-A3B-Instruct
+    ram_gb_approx: 18
+  coding_critic:
+    folder: DeepSeek-Coder-V2-Lite-Instruct
+    ram_gb_approx: 9
+  reasoning_deep:
+    folder: Qwen3-30B-A3B-Thinking-2507
+    ram_gb_approx: 18
+  reasoning_fast:
+    folder: Qwen3-8B
+    ram_gb_approx: 5
   general_fast:
     folder: Phi-3.5-mini-instruct
-    quant: 4bit
-    ram_gb_approx: 3.2
+    ram_gb_approx: 3
+  vision:
+    folder: Phi-3.5-vision-instruct
+    ram_gb_approx: 4
+  general_strong:
+    folder: Qwen3-30B-A3B-Instruct-2507
+    ram_gb_approx: 18
+  efficient_general:
+    folder: Phi-3.5-MoE-instruct
+    ram_gb_approx: 6
+  light_reasoning:
+    folder: DeepSeek-R1-0528-Qwen3-8B
+    ram_gb_approx: 5
+  reasoning_advanced:
+    folder: QwQ-32B
+    ram_gb_approx: 20

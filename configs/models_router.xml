@@ -1,0 +1,13 @@
+<routes>
+  <route name="creative_explore" description="High-creativity, uncensored ideation, divergent thinking, storytelling, roleplay. Maximal idea generation with minimal guardrails."/>
+  <route name="coding_expert" description="Production-grade code generation, repo-scale understanding, implementation, refactoring."/>
+  <route name="coding_critic" description="Rigorous code review, edge-case detection."/>
+  <route name="reasoning_deep" description="Deep multi-step reasoning, math/science."/>
+  <route name="reasoning_fast" description="Fast reasoning and instruction following."/>
+  <route name="general_fast" description="Ultra-low latency chat, simple tasks."/>
+  <route name="vision" description="Image/diagram understanding."/>
+  <route name="general_strong" description="Strong general-purpose tasks."/>
+  <route name="efficient_general" description="Efficient MoE general chat/reasoning. Good middle ground when Phi-3.5-mini is too weak."/>
+  <route name="light_reasoning" description="Distilled reasoning at 8B scale. Lightweight CoT/agentic behavior fallback."/>
+  <route name="reasoning_advanced" description="Dense 32B reasoning model. Competitive o1-style thinking and planning when extra depth is justified."/>
+</routes>

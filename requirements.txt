@@ -1,11 +1,28 @@
+# Core MLX + inference
 mlx
-mlx-lm
-mlx-audio
-mlx-whisper
-langgraph
-mem0ai
-chromadb
-sentence-transformers
-httpx
-pyyaml
-psutil
+mlx-lm>=0.17.0          # latest stable as of Feb 2026
+
+# FastAPI / proxy server
+fastapi>=0.115.0
+uvicorn>=0.30.0
+pydantic>=2.8.0
+
+# HTTP client (async + sync)
+httpx>=0.27.0
+
+# YAML / config handling
+pyyaml>=6.0.1
+
+# System / resource monitoring
+psutil>=5.9.8
+
+# Memory / vector DB
+chromadb>=0.5.5
+mem0ai>=0.1.0           # mem0 (local config + Chroma backend)
+
+# Embeddings (offline huggingface model)
+sentence-transformers>=3.0.0
+
+# Optional / useful for debugging or future extensions
+requests>=2.32.0
+tqdm>=4.66.0            # progress bars if needed

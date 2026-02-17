@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<routes>
+  <route name="creative_explore">
+    <folder>gpt-oss-20b-Derestricted-mxfp4-mlx</folder>
+    <ram_gb_approx>12</ram_gb_approx>
+    <description>High-creativity, uncensored ideation, divergent thinking, storytelling, roleplay. Maximal idea generation with minimal guardrails.</description>
+  </route>
+
+  <route name="coding_expert">
+    <folder>Qwen3-Coder-30B-A3B-Instruct</folder>
+    <ram_gb_approx>18</ram_gb_approx>
+    <description>Production-grade code generation, repo-scale understanding, implementation, refactoring.</description>
+  </route>
+
+  <route name="coding_critic">
+    <folder>DeepSeek-Coder-V2-Lite-Instruct</folder>
+    <ram_gb_approx>9</ram_gb_approx>
+    <description>Rigorous code review, edge-case detection.</description>
+  </route>
+
+  <route name="reasoning_deep">
+    <folder>Qwen3-30B-A3B-Thinking-2507</folder>
+    <ram_gb_approx>18</ram_gb_approx>
+    <description>Deep multi-step reasoning, math/science.</description>
+  </route>
+
+  <route name="reasoning_fast">
+    <folder>Qwen3-8B</folder>
+    <ram_gb_approx>5</ram_gb_approx>
+    <description>Fast reasoning and instruction following.</description>
+  </route>
+
+  <route name="general_fast">
+    <folder>Phi-3.5-mini-instruct</folder>
+    <ram_gb_approx>3</ram_gb_approx>
+    <description>Ultra-low latency chat, simple tasks.</description>
+  </route>
+
+  <route name="vision">
+    <folder>Phi-3.5-vision-instruct</folder>
+    <ram_gb_approx>4</ram_gb_approx>
+    <description>Image/diagram understanding.</description>
+  </route>
+
+  <route name="general_strong">
+    <folder>Qwen3-30B-A3B-Instruct-2507</folder>
+    <ram_gb_approx>18</ram_gb_approx>
+    <description>Strong general-purpose tasks.</description>
+  </route>
+
+  <!-- Additional routes based on full model list -->
+
+  <route name="efficient_general">
+    <folder>Phi-3.5-MoE-instruct</folder>
+    <ram_gb_approx>6</ram_gb_approx>
+    <description>Efficient MoE general chat/reasoning. Good middle ground when Phi-3.5-mini is too weak.</description>
+  </route>
+
+  <route name="light_reasoning">
+    <folder>DeepSeek-R1-0528-Qwen3-8B</folder>
+    <ram_gb_approx>5</ram_gb_approx>
+    <description>Distilled reasoning at 8B scale. Lightweight CoT/agentic behavior fallback.</description>
+  </route>
+
+  <route name="reasoning_advanced">
+    <folder>QwQ-32B</folder>
+    <ram_gb_approx>20</ram_gb_approx>
+    <description>Dense 32B reasoning model. Competitive o1-style thinking and planning when extra depth is justified.</description>
+  </route>
+
+  <!-- Reranker is not directly a chat route → excluded from <routes> -->
+</routes>

@@ -12,8 +12,7 @@ __pycache__/
 
 # Project-specific ignores (from earlier)
 models/
-memory/chroma_db/
-chroma_db/
+memory/
 logs/
 *.log
 .DS_Store
