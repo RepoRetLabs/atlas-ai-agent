@@ -14,6 +14,7 @@ __pycache__/
 models/
 memory/
 logs/
+state/
 *.log
 .DS_Store
 state/active_models.json

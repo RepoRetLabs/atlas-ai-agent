@@ -68,7 +68,7 @@ async def chat_completions(req: ChatRequest, request: Request):
         logger.info(f"Explicit route: {route}", extra=extra)
     else:
         route_prompt = f"""
-You are a precise route selector. Output ONLY valid JSON.
+You are a precise route selector. Output ONLY valid JSON. No thinking, no analysis, no extra text.
 
 Use ONLY these routes:
 
@@ -81,12 +81,14 @@ Use ONLY these routes:
 </conversation>
 
 Rules:
-- Choose the single best route name based on latest user intent.
+- Select the single best route name based on latest user intent.
 - If no strong match or intent already fulfilled → return "other"
-- Output EXACTLY this format and nothing else:
-{{"route": "exact_route_name"}}
-- No reasoning. No extra text. No markdown. No explanations.
-- Use double quotes only. Do not use single quotes.
+- Output EXACTLY this format and nothing else: {{"route": "exact_route_name"}}
+- Use double quotes only. Do not use single quotes or any other format.
+- Examples:
+  Input: Write code → Output: {{"route": "coding_expert"}}
+  Input: Deep math problem → Output: {{"route": "reasoning_deep"}}
+  Input: Casual chat → Output: {{"route": "general_fast"}}
 """
 
         router_payload = {
@@ -102,18 +104,26 @@ Rules:
                 content = r.json()["choices"][0]["message"]["content"].strip()
                 logger.debug(f"Raw router output: {content}", extra=extra)
 
-                # Robust extraction
-                match = re.search(r'\{.*?"route".*?:.*?"([^"]+)"', content, re.DOTALL)
-                if match:
-                    route = match.group(1)
-                else:
-                    # Try json.loads on cleaned string
-                    cleaned = re.sub(r"['`]", '"', content)
-                    try:
-                        data = json.loads(cleaned)
-                        route = data.get("route", "general_fast")
-                    except json.JSONDecodeError as je:
-                        logger.error(f"Router JSON parse failed: {je} | raw: {content} → fallback", extra=extra)
+                # Clean reasoning leaks/tags
+                content = re.sub(r'<\|.*?\|>', '', content)  # Remove <|channel|> etc.
+                content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
+                content = re.sub(r'(\w+):', r'"\1":', content)  # Add quotes to keys
+                content = re.sub(r'\'', '"', content)  # Single to double quotes
+                content = re.sub(r'Output:', '', content, flags=re.IGNORECASE)  # Strip prefixes
+
+                # Try JSON parse first
+                try:
+                    data = json.loads(content)
+                    route = data.get("route", "general_fast")
+                except json.JSONDecodeError:
+                    # Fallback: extract mentioned route from reasoning
+                    for avail_route in AVAILABLE_ROUTES:
+                        if avail_route in content:
+                            route = avail_route
+                            logger.info(f"Extracted route from reasoning: {route}", extra=extra)
+                            break
+                    else:
+                        logger.error(f"No route in reasoning | raw: {content} → fallback", extra=extra)
                         route = "general_fast"
 
                 logger.info(f"Router selected: {route}", extra=extra)
@@ -143,7 +153,16 @@ Rules:
     payload["repetition_penalty"] = 1.2
     payload["stop"] = ["<|end|>"]
 
-    # 3. Memory injection (unchanged)
+    # Dynamic max_tokens for creative/reasoning routes
+    if "creative" in route or "reasoning" in route:
+        payload["max_tokens"] = 2048  # Boost for stories
+
+    # Stronger anti-CoT: Repeat in system + user
+    anti_cot_system = {"role": "system", "content": "Respond directly without reasoning, analysis, tags like <think>, <channel>, or extra text. Output only the final response. No CoT."}
+    anti_cot_user = {"role": "user", "content": "Direct answer only, no reasoning."}
+    payload["messages"] = [anti_cot_system] + payload["messages"] + [anti_cot_user]
+
+    # 3. Memory injection
     query_text = req.messages[-1]["content"]
     try:
         query_embedding = init_memory.embedder.encode(query_text).tolist()
@@ -161,14 +180,36 @@ Rules:
     except Exception as e:
         logger.warning(f"Memory search failed: {e}", extra=extra)
 
-    # 4. Forward request
+    # 4. Forward request with retry on empty/short
     logger.info(f"Forwarding to {route} on port {port}", extra=extra)
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.post(url, json=payload, timeout=120)
-            resp.raise_for_status()
-            data = resp.json()
+            response_text = ""
+            for attempt in range(3):  # Retry up to 3x
+                resp = await client.post(url, json=payload, timeout=180)  # Extend timeout
+                resp.raise_for_status()
+                data = resp.json()
+                temp_text = data["choices"][0]["message"]["content"].strip()
+                if len(temp_text) > 50:  # Min length threshold
+                    response_text = temp_text
+                    break
+                logger.warning(f"Short/empty from {route} ({len(temp_text)} chars) - retry {attempt+1}", extra=extra)
+                payload["messages"].append({"role": "user", "content": "Generate a complete, detailed response."})
+                payload["max_tokens"] += 512  # Incremental boost
+                payload["temperature"] = 0.8  # Slight randomness for variety
+
             data["model"] = route
+
+            # Clean backend leaks
+            response_text = re.sub(r'<\|.*?\|>', '', response_text)
+            response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL | re.IGNORECASE)
+            response_text = re.sub(r'<channel>.*?</channel>', '', response_text, flags=re.DOTALL | re.IGNORECASE)
+            response_text = re.sub(r'analysis.*?$', '', response_text, flags=re.DOTALL | re.IGNORECASE)
+            response_text = response_text.strip()
+            data["choices"][0]["message"]["content"] = response_text
+
+            if not response_text:
+                data["choices"][0]["message"]["content"] = "Sorry, response generation failed. Please try again."
 
             usage = data.get("usage", {})
             logger.info(
@@ -178,7 +219,6 @@ Rules:
             )
 
             # 5. Save response to memory
-            response_text = data["choices"][0]["message"]["content"]
             response_embedding = init_memory.embedder.encode(response_text).tolist()
             init_memory.collection.add(
                 documents=[response_text],

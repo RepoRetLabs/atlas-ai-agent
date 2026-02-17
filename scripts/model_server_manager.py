@@ -9,12 +9,16 @@ import httpx
 from itertools import cycle
 import threading
 from pathlib import Path
+import fcntl  # For file locking
 
 SCRIPT_DIR   = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 CONFIG_DIR = PROJECT_ROOT / "configs"
 LOGS_DIR = PROJECT_ROOT / "logs"
 STATE_FILE = PROJECT_ROOT / "state" / "active_models.yaml"
+LOCK_DIR = PROJECT_ROOT / "state" / "locks"
+
+LOCK_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     filename=LOGS_DIR / "model_manager.log",
@@ -33,7 +37,7 @@ class ModelServerManager:
         self.max_concurrent = net_cfg["max_concurrent"]
         self.ram_margin_gb = net_cfg["ram_safety_margin_gb"]
         self.large_threshold_gb = net_cfg.get("large_model_ram_threshold_gb", 10)
-        self.idle_timeout_min = net_cfg.get("idle_timeout_min", 10)
+        self.idle_timeout_min = net_cfg.get("idle_timeout_min", 30)  # Extended default
         self.active = self._load_state()  # route → {"port": int, "pid": int, "last_used": float}
         
         self._start_idle_checker()
@@ -51,8 +55,31 @@ class ModelServerManager:
     def get_free_ram_gb(self):
         return psutil.virtual_memory().available / (1024 ** 3)
 
+    def _is_active_inference(self, route):
+        lock_file = LOCK_DIR / f"{route}.lock"
+        if not lock_file.exists():
+            return False
+        try:
+            with open(lock_file, "r") as f:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(f, fcntl.LOCK_UN)
+                return False  # Unlocked → no active
+        except IOError:
+            return True  # Locked → active
+
+    def _lock_inference(self, route, lock=True):
+        lock_file = LOCK_DIR / f"{route}.lock"
+        if lock:
+            with open(lock_file, "w") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+        else:
+            if lock_file.exists():
+                with open(lock_file, "r") as f:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+                lock_file.unlink()
+
     def _unload_route(self, route):
-        if route not in self.active:
+        if route not in self.active or self._is_active_inference(route):
             return
         pid = self.active[route]["pid"]
         logging.info(f"Unloading {route} (pid {pid})")
@@ -75,6 +102,7 @@ class ModelServerManager:
                 to_unload = [
                     r for r, info in list(self.active.items())
                     if now - info["last_used"] > self.idle_timeout_min * 60
+                    and not self._is_active_inference(r)
                 ]
                 for route in to_unload:
                     logging.info(f"Idle timeout ({self.idle_timeout_min} min) → unloading {route}")
@@ -139,6 +167,7 @@ class ModelServerManager:
             if psutil.pid_exists(self.active[route]["pid"]):
                 self.active[route]["last_used"] = time.time()
                 self._save_state()
+                self._lock_inference(route)  # Lock during use
                 return self.active[route]["port"]
             else:
                 logging.info(f"Detected dead process for {route}")
