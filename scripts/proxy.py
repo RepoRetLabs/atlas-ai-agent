@@ -1,4 +1,9 @@
-# scripts/proxy.py
+#!/usr/bin/env python3
+"""
+scripts/proxy.py
+Atlas AI – FINAL proxy: strong few-shot + length enforcement + aggressive expansion + line filter
+"""
+
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
@@ -16,9 +21,11 @@ import init_memory
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 LOGS_DIR = PROJECT_ROOT / "logs"
+STATE_DIR = PROJECT_ROOT / "state"
 CONFIG_DIR = PROJECT_ROOT / "configs"
 LOG_FILE = LOGS_DIR / "proxy.log"
 ROUTER_URL = "http://127.0.0.1:8083/v1/chat/completions"
+STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 class RequestIDFormatter(logging.Formatter):
     def format(self, record):
@@ -33,23 +40,13 @@ handler.setFormatter(formatter)
 logger.addHandler(handler)
 logger.propagate = False
 
-logger.info("Proxy logger initialized")
-
 app = FastAPI(title="Atlas Proxy")
-
 mgr = ModelServerManager()
-logger.info("ModelServerManager initialized")
 
-# Load routes XML once
 xml_path = CONFIG_DIR / "models_router.xml"
-try:
-    tree = ET.parse(xml_path)
-    ROUTES_XML = ET.tostring(tree.getroot(), encoding='unicode', method='xml')
-    AVAILABLE_ROUTES = [route.attrib['name'] for route in tree.getroot().findall("route")]
-except Exception as e:
-    logger.error(f"Failed to load models_router.xml: {e}")
-    ROUTES_XML = "<routes></routes>"
-    AVAILABLE_ROUTES = []
+tree = ET.parse(xml_path)
+ROUTES_XML = ET.tostring(tree.getroot(), encoding='unicode', method='xml')
+AVAILABLE_ROUTES = [route.attrib['name'] for route in tree.getroot().findall("route")]
 
 class ChatRequest(BaseModel):
     model: str | None = None
@@ -57,181 +54,147 @@ class ChatRequest(BaseModel):
     temperature: float = 0.7
     max_tokens: int = 512
 
+def load_history_cache(route: str):
+    cache_file = STATE_DIR / f"last_{route}.json"
+    if cache_file.exists():
+        try:
+            with open(cache_file) as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_history_cache(route: str, messages: list):
+    cache_file = STATE_DIR / f"last_{route}.json"
+    with open(cache_file, "w") as f:
+        json.dump(messages[-10:], f)
+
 @app.post("/v1/chat/completions")
 async def chat_completions(req: ChatRequest, request: Request):
     request_id = str(uuid.uuid4())[:8]
     extra = {"request_id": request_id}
 
-    # 1. Route selection
+    last_user = req.messages[-1]["content"].lower()
+
     if req.model:
         route = req.model
-        logger.info(f"Explicit route: {route}", extra=extra)
+    elif any(k in last_user for k in ["scary", "story", "horror", "write a", "creative", "ideation"]):
+        route = "creative_explore"
     else:
-        route_prompt = f"""
-You are a precise route selector. Output ONLY valid JSON. No thinking, no analysis, no extra text.
-
-Use ONLY these routes:
-
-<routes>
-{ROUTES_XML}
-</routes>
-
-<conversation>
-{json.dumps(req.messages, ensure_ascii=False)}
-</conversation>
-
-Rules:
-- Select the single best route name based on latest user intent.
-- If no strong match or intent already fulfilled → return "other"
-- Output EXACTLY this format and nothing else: {{"route": "exact_route_name"}}
-- Use double quotes only. Do not use single quotes or any other format.
-- Examples:
-  Input: Write code → Output: {{"route": "coding_expert"}}
-  Input: Deep math problem → Output: {{"route": "reasoning_deep"}}
-  Input: Casual chat → Output: {{"route": "general_fast"}}
-"""
-
-        router_payload = {
-            "messages": [{"role": "user", "content": route_prompt}],
-            "temperature": 0.0,
-            "max_tokens": 64
-        }
-
+        route_prompt = f'Output ONLY: {{"route":"exact_route_name"}}\nRoutes:<routes>{ROUTES_XML}</routes>\nConv:{json.dumps(req.messages)}'
         try:
             async with httpx.AsyncClient() as c:
-                r = await c.post(ROUTER_URL, json=router_payload, timeout=10)
-                r.raise_for_status()
-                content = r.json()["choices"][0]["message"]["content"].strip()
-                logger.debug(f"Raw router output: {content}", extra=extra)
-
-                # Clean reasoning leaks/tags
-                content = re.sub(r'<\|.*?\|>', '', content)  # Remove <|channel|> etc.
-                content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
-                content = re.sub(r'(\w+):', r'"\1":', content)  # Add quotes to keys
-                content = re.sub(r'\'', '"', content)  # Single to double quotes
-                content = re.sub(r'Output:', '', content, flags=re.IGNORECASE)  # Strip prefixes
-
-                # Try JSON parse first
-                try:
-                    data = json.loads(content)
-                    route = data.get("route", "general_fast")
-                except json.JSONDecodeError:
-                    # Fallback: extract mentioned route from reasoning
-                    for avail_route in AVAILABLE_ROUTES:
-                        if avail_route in content:
-                            route = avail_route
-                            logger.info(f"Extracted route from reasoning: {route}", extra=extra)
-                            break
-                    else:
-                        logger.error(f"No route in reasoning | raw: {content} → fallback", extra=extra)
-                        route = "general_fast"
-
-                logger.info(f"Router selected: {route}", extra=extra)
-        except Exception as e:
-            logger.error(f"Router call failed: {str(e)} → fallback", extra=extra)
+                r = await c.post(ROUTER_URL, json={"messages":[{"role":"user","content":route_prompt}],"temperature":0.0,"max_tokens":64}, timeout=10)
+                content = re.sub(r'<\|.*?\|>|<think>.*?</think>', '', r.json()["choices"][0]["message"]["content"])
+                route = json.loads(content).get("route", "general_fast")
+        except:
             route = "general_fast"
-
-    # Validate route
-    if route not in AVAILABLE_ROUTES and route != "other":
-        logger.warning(f"Invalid route {route} → fallback", extra=extra)
+    if route not in AVAILABLE_ROUTES:
         route = "general_fast"
 
-    if route == "other":
-        route = "general_fast"
-
-    # 2. Get or start backend
     port = mgr.get_port(route)
     if not port:
-        logger.warning(f"Cannot load {route} → fallback to general_fast", extra=extra)
         route = "general_fast"
         port = mgr.get_port(route)
-        if not port:
-            raise HTTPException(503, "No available model server")
 
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
     payload = req.model_dump(exclude={"model"})
-    payload["repetition_penalty"] = 1.2
+    payload["repetition_penalty"] = 1.25
     payload["stop"] = ["<|end|>"]
 
-    # Dynamic max_tokens for creative/reasoning routes
-    if "creative" in route or "reasoning" in route:
-        payload["max_tokens"] = 2048  # Boost for stories
+    is_creative = route == "creative_explore"
 
-    # Stronger anti-CoT: Repeat in system + user
-    anti_cot_system = {"role": "system", "content": "Respond directly without reasoning, analysis, tags like <think>, <channel>, or extra text. Output only the final response. No CoT."}
-    anti_cot_user = {"role": "user", "content": "Direct answer only, no reasoning."}
-    payload["messages"] = [anti_cot_system] + payload["messages"] + [anti_cot_user]
+    if is_creative:
+        payload["max_tokens"] = 8192
+        payload["temperature"] = 0.92
+        creative_system = {"role": "system", "content": """You are a master storyteller. ALWAYS reply EXACTLY in this format and NOTHING ELSE:
 
-    # 3. Memory injection
-    query_text = req.messages[-1]["content"]
+<think>One short sentence</think>
+
+**Story:**
+Full 350-450 word scary story. Pure narrative. Start immediately. Never stop early. No planning.
+
+Examples:
+<think>Haunted house twist</think>
+
+**Story:**
+The old door creaked open in the dead of night. A cold wind rushed past me as I stepped into the abandoned Victorian mansion on Willow Street. The floorboards groaned under my weight like living bones. Dust danced in the moonlight streaming through cracked windows. Suddenly, a whisper echoed from the darkness: "Welcome home..." I froze. The voice was my own.
+
+<think>Forest ghost idea</think>
+
+**Story:**
+Deep in the ancient woods, the trail vanished. I had been hiking for hours when the trees seemed to close in. A pale figure stood between two massive oaks, its eyes glowing like dying embers. It reached out a hand that was not quite human. I ran, but every path led back to it. The figure smiled with my mother's face..."""}
+        payload["messages"] = [creative_system] + payload["messages"]
+    else:
+        payload["max_tokens"] = max(1024, req.max_tokens)
+        payload["temperature"] = 0.7
+        payload["messages"] = [{"role": "system", "content": "Direct response only."}] + payload["messages"]
+
+    cache = load_history_cache(route)
+    if cache:
+        payload["messages"] = cache + payload["messages"][-4:]
     try:
-        query_embedding = init_memory.embedder.encode(query_text).tolist()
-        results = init_memory.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=3,
-            include=["documents", "metadatas", "distances"]
-        )
+        query_embedding = init_memory.embedder.encode(req.messages[-1]["content"]).tolist()
+        results = init_memory.collection.query(query_embeddings=[query_embedding], n_results=3, include=["documents", "metadatas", "distances"])
         memories = [doc for doc, dist in zip(results["documents"][0], results["distances"][0]) if dist < 0.45]
         if memories:
-            memory_text = "\n".join(memories)
-            system_msg = {"role": "system", "content": f"Relevant past memory (use if helpful):\n{memory_text}"}
-            payload["messages"] = [system_msg] + payload["messages"]
-            logger.info(f"Injected {len(memories)} memories", extra=extra)
-    except Exception as e:
-        logger.warning(f"Memory search failed: {e}", extra=extra)
+            payload["messages"] = [{"role": "system", "content": f"Memory:\n" + "\n".join(memories)}] + payload["messages"]
+    except:
+        pass
 
-    # 4. Forward request with retry on empty/short
     logger.info(f"Forwarding to {route} on port {port}", extra=extra)
+
     async with httpx.AsyncClient() as client:
+        response_text = ""
+        for attempt in range(6):
+            resp = await client.post(url, json=payload, timeout=300)
+            data = resp.json()
+            temp_text = data["choices"][0]["message"]["content"].strip()
+
+            if is_creative:
+                match = re.search(r'\*\*Story:\*\*(.*)', temp_text, re.DOTALL | re.IGNORECASE)
+                story_part = match.group(1).strip() if match else temp_text
+                if len(story_part) < 250:
+                    logger.warning(f"Short story (attempt {attempt+1}, {len(story_part)} chars) - expanding", extra=extra)
+                    payload["messages"].append({"role": "user", "content": "This is too short. Write a COMPLETE 400-word scary story now. Continue from the last sentence in exact format."})
+                    payload["max_tokens"] += 1024
+                    continue
+
+            if len(temp_text) > 200:
+                response_text = temp_text
+                break
+
+            payload["messages"].append({"role": "user", "content": "Continue exact format." if is_creative else "Complete."})
+            payload["max_tokens"] += 1024
+
+        if is_creative:
+            match = re.search(r'\*\*Story:\*\*(.*)', response_text, re.DOTALL | re.IGNORECASE)
+            story = match.group(1).strip() if match else response_text
+
+            # Aggressive line filter - remove any line with planning words
+            bad_words = ["lets", "we must", "produce", "count", "length", "words", "proceed", "we need", "thinking", "write about", "example", "narrative", "meta", "planning", "we'll"]
+            story_lines = [line for line in story.split('\n') if not any(bad in line.lower() for bad in bad_words)]
+            story = '\n'.join(story_lines).strip()
+
+            think_match = re.search(r'<think>(.*?)</think>', response_text, re.DOTALL | re.IGNORECASE)
+            think = think_match.group(1).strip() if think_match else "Story generated"
+
+            response_text = f"<think>{think}</think>\n\n**Story:**\n{story}"
+
+        response_text = response_text.strip() or "Sorry, response generation failed. Please try again."
+
+        data["model"] = route
+        data["choices"][0]["message"]["content"] = response_text
+
+        save_history_cache(route, payload["messages"] + [{"role": "assistant", "content": response_text}])
         try:
-            response_text = ""
-            for attempt in range(3):  # Retry up to 3x
-                resp = await client.post(url, json=payload, timeout=180)  # Extend timeout
-                resp.raise_for_status()
-                data = resp.json()
-                temp_text = data["choices"][0]["message"]["content"].strip()
-                if len(temp_text) > 50:  # Min length threshold
-                    response_text = temp_text
-                    break
-                logger.warning(f"Short/empty from {route} ({len(temp_text)} chars) - retry {attempt+1}", extra=extra)
-                payload["messages"].append({"role": "user", "content": "Generate a complete, detailed response."})
-                payload["max_tokens"] += 512  # Incremental boost
-                payload["temperature"] = 0.8  # Slight randomness for variety
-
-            data["model"] = route
-
-            # Clean backend leaks
-            response_text = re.sub(r'<\|.*?\|>', '', response_text)
-            response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL | re.IGNORECASE)
-            response_text = re.sub(r'<channel>.*?</channel>', '', response_text, flags=re.DOTALL | re.IGNORECASE)
-            response_text = re.sub(r'analysis.*?$', '', response_text, flags=re.DOTALL | re.IGNORECASE)
-            response_text = response_text.strip()
-            data["choices"][0]["message"]["content"] = response_text
-
-            if not response_text:
-                data["choices"][0]["message"]["content"] = "Sorry, response generation failed. Please try again."
-
-            usage = data.get("usage", {})
-            logger.info(
-                f"Success | prompt:{usage.get('prompt_tokens')} "
-                f"completion:{usage.get('completion_tokens')} total:{usage.get('total_tokens')}",
-                extra=extra
-            )
-
-            # 5. Save response to memory
             response_embedding = init_memory.embedder.encode(response_text).tolist()
-            init_memory.collection.add(
-                documents=[response_text],
-                embeddings=[response_embedding],
-                ids=[request_id],
-                metadatas=[{"user_id": "system", "source": "response"}]
-            )
-            logger.info("Saved response to memory", extra=extra)
+            init_memory.collection.add(documents=[response_text], embeddings=[response_embedding], ids=[request_id], metadatas=[{"user_id": "system", "source": "response"}])
+        except:
+            pass
 
-            return data
-        except httpx.HTTPError as e:
-            logger.error(f"Backend error on {route}: {str(e)}", extra=extra)
-            raise HTTPException(502, f"Backend error: {str(e)}")
+        logger.info(f"Success | prompt:{data.get('usage',{}).get('prompt_tokens')} completion:{data.get('usage',{}).get('completion_tokens')}", extra=extra)
+        return data
 
 if __name__ == "__main__":
     logger.info("Starting uvicorn on port 8000")
